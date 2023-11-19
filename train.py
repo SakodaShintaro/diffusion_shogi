@@ -10,6 +10,7 @@ from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from tqdm import tqdm
+import random
 
 from dataset import (BOARD_SIZE, HAND_PIECE_KIND_NUM, INPUT_SEQ_LEN,
                      PIECE_KIND_NUM, ShogiDataset)
@@ -24,19 +25,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def generate_board(
-    model: TransformerModel, noise_scheduler: DDPMScheduler
-) -> cshogi.Board:
-    """Generate board from model."""
-    x = torch.randn((1, INPUT_SEQ_LEN, PIECE_KIND_NUM)).to("cuda")
-    for t in noise_scheduler.timesteps:
-        t_tensor = torch.tensor([t]).to("cuda").long()
-        with torch.no_grad():
-            y = model(x, t_tensor)
-            x = noise_scheduler.step(y.cpu(), t_tensor.cpu(), x.cpu()).prev_sample.to(
-                "cuda"
-            )
-    x = x[0]
+def tensor_to_board(x: torch.Tensor) -> cshogi.Board:
     x = torch.argmax(x, dim=1)
     board = cshogi.Board()
     pieces_src = board.pieces
@@ -57,6 +46,24 @@ def generate_board(
     return board
 
 
+def generate_board(
+    model: TransformerModel, noise_scheduler: DDPMScheduler, dataset: ShogiDataset
+) -> cshogi.Board:
+    """Generate board from model."""
+    index = random.randrange(0, len(dataset))
+    condition, target = dataset[index]
+    condition = condition.unsqueeze(0).to("cuda")
+    x = torch.randn((1, INPUT_SEQ_LEN, PIECE_KIND_NUM)).to("cuda")
+    for t in noise_scheduler.timesteps:
+        t_tensor = torch.tensor([t]).to("cuda").long()
+        with torch.no_grad():
+            y = model(x, t_tensor, condition)
+            x = noise_scheduler.step(y.cpu(), t_tensor.cpu(), x.cpu()).prev_sample.to(
+                "cuda"
+            )
+    return tensor_to_board(condition[0]), tensor_to_board(x[0]), tensor_to_board(target)
+
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -72,7 +79,7 @@ if __name__ == "__main__":
         pin_memory=True,
     )
 
-    model = TransformerModel(PIECE_KIND_NUM, 6, 384)
+    model = TransformerModel(PIECE_KIND_NUM, 3, 256)
 
     noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 
@@ -112,24 +119,26 @@ if __name__ == "__main__":
         progress_bar.set_description(f"Epoch {epoch}")
         loss_sum = 0
         for batch in train_dataloader:
+            condition, target = batch
+
             # Sample noise to add to the images
-            noise = torch.randn(batch.shape).to(batch.device)
-            bs = batch.shape[0]
+            noise = torch.randn(condition.shape).to(condition.device)
+            bs = condition.shape[0]
 
             # Sample a random timestep for each image
             timesteps = torch.randint(
                 0,
                 noise_scheduler.config.num_train_timesteps,
                 (bs,),
-                device=batch.device,
+                device=condition.device,
             ).long()
 
             # Add noise
-            noisy_batch = noise_scheduler.add_noise(batch, noise, timesteps)
+            noisy_batch = noise_scheduler.add_noise(target, noise, timesteps)
 
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                noise_pred = model(noisy_batch, timesteps)
+                noise_pred = model(noisy_batch, timesteps, condition)
                 loss = F.mse_loss(noise_pred, noise)
                 accelerator.backward(loss)
 
@@ -160,12 +169,15 @@ if __name__ == "__main__":
             is_last = epoch == config.num_epochs - 1
             save_board_epochs = max(1, config.num_epochs // 10)
             if (epoch + 1) % save_board_epochs == 0 or is_last:
-                condition, result = generate_board(model, noise_scheduler, dataset)
+                condition, result, target = generate_board(model, noise_scheduler, dataset)
                 svg = condition.to_svg()
                 with open(f"{output_dir}/condition_{epoch + 1:04d}.svg", "w") as f:
                     f.write(svg)
                 svg = result.to_svg()
                 with open(f"{output_dir}/board_{epoch + 1:04d}.svg", "w") as f:
+                    f.write(svg)
+                svg = target.to_svg()
+                with open(f"{output_dir}/target_{epoch + 1:04d}.svg", "w") as f:
                     f.write(svg)
 
             if is_last:

@@ -46,10 +46,10 @@ class TransformerModel(nn.Module):
         super(TransformerModel, self).__init__()
         nhead = CHANNEL_NUM_TO_NHEAD[channel_num]
 
-        self.first_encoding_ = torch.nn.Linear(input_channel_num, channel_num)
+        self.first_encoding_ = torch.nn.Linear(input_channel_num * 2, channel_num)
         self.positional_encoding_ = torch.nn.Parameter(
             torch.zeros([INPUT_SEQ_LEN, 1, channel_num]), requires_grad=True)
-        self.time_encoding_ = IntEncoding(channel_num, 1000)
+        self.step_encoding_ = IntEncoding(channel_num, 1000)
         encoder_layer = torch.nn.TransformerEncoderLayer(
             channel_num,
             nhead=nhead,
@@ -61,14 +61,31 @@ class TransformerModel(nn.Module):
             encoder_layer, block_num, enable_nested_tensor=False)  # type: ignore
         self.head_ = torch.nn.Linear(channel_num, input_channel_num)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        te = self.time_encoding_(t)
-        te = te.squeeze(1)
-        te = te.unsqueeze(0)
-
+    def encode_position(self, x: torch.Tensor) -> torch.Tensor:
         x = x.permute([1, 0, 2])  # [bs, seq, ch] -> [seq, bs, ch]
         x = self.first_encoding_(x)
         x = x + self.positional_encoding_
+        return x
+
+    def forward(self, x: torch.Tensor, diffusion_step: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        """
+        forward function.
+
+        x.shape              = [batch_size, seq, ch]
+        diffusion_step.shape = [batch_size]
+        condition.shape      = [batch_size, seq, ch] (ch is the same as x.shape[2])
+        """
+
+        # encode position
+        x = torch.cat([x, condition], 2)
+        x = self.encode_position(x)
+
+        # encode step
+        te = self.step_encoding_(diffusion_step)
+        te = te.squeeze(1)
+        te = te.unsqueeze(0)  # [bs, dim] -> [1, bs, dim]
+
+        # forward
         x = torch.cat([x, te], dim=0)
         x = self.encoder_(x)
         x = x[0:-1]
@@ -92,8 +109,8 @@ if __name__ == "__main__":
 
     batch_size = 16
     input_data = torch.randn(
-        [batch_size, input_channel_num, BOARD_SIZE, BOARD_SIZE])
+        [batch_size, INPUT_SEQ_LEN, input_channel_num])
     timesteps = torch.randint(0, 1000, (batch_size,)).long()
 
-    out = model(input_data, timesteps)
+    out = model(input_data, timesteps, input_data)
     print(out.shape)
