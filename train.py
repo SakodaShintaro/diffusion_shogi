@@ -154,15 +154,19 @@ if __name__ == "__main__":
         result_str += f"epoch:{epoch + 1:04d}\t"
         result_str += f"global_step:{global_step:08d}\t"
         result_str += f"loss_avg:{loss_avg:.4f}"
-        print(result_str)
+        # print(result_str)
 
         if accelerator.is_main_process:
             is_last = epoch == config.num_epochs - 1
-            if (epoch + 1) % config.save_board_epochs == 0 or is_last:
-                board = generate_board(model, noise_scheduler)
-                svg = board.to_svg()
+            save_board_epochs = max(1, config.num_epochs // 10)
+            if (epoch + 1) % save_board_epochs == 0 or is_last:
+                condition, result = generate_board(model, noise_scheduler, dataset)
+                svg = condition.to_svg()
+                with open(f"{output_dir}/condition_{epoch + 1:04d}.svg", "w") as f:
+                    f.write(svg)
+                svg = result.to_svg()
                 with open(f"{output_dir}/board_{epoch + 1:04d}.svg", "w") as f:
                     f.write(svg)
 
-            if (epoch + 1) % config.save_model_epochs == 0 or is_last:
+            if is_last:
                 torch.save(model.state_dict(), f"{output_dir}/model_{epoch + 1:04d}.pt")
