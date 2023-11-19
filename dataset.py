@@ -8,7 +8,13 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 PIECE_KIND_NUM = 31
+
+# 歩, 香, 桂, 銀, 金, 角, 飛
+HAND_PIECE_KIND_NUM = 7 * 2
+
 BOARD_SIZE = 9
+
+INPUT_SEQ_LEN = BOARD_SIZE * BOARD_SIZE + HAND_PIECE_KIND_NUM + 1
 
 
 class ShogiDataset(Dataset[torch.Tensor]):
@@ -32,23 +38,36 @@ class ShogiDataset(Dataset[torch.Tensor]):
         return len(self.sfen_list)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        """Return board tensor."""
+        """Return position tensor.
+
+        shape = [INPUT_SEQ_LEN, PIECE_KIND_NUM]
+        """
         sfen = self.sfen_list[idx]
         board = cshogi.Board(sfen)
-        board_tensor = torch.zeros(BOARD_SIZE, BOARD_SIZE, dtype=torch.long)
+        board_tensor = torch.zeros(BOARD_SIZE * BOARD_SIZE, dtype=torch.long)
         for i in range(9):
             for j in range(9):
                 piece = board.piece(i * 9 + j)
-                board_tensor[i, j] = piece
-        board_tensor = torch.nn.functional.one_hot(board_tensor, PIECE_KIND_NUM)
-        board_tensor = board_tensor.to(torch.float)
-        board_tensor = board_tensor.permute(2, 0, 1)
-        return board_tensor
+                board_tensor[i * BOARD_SIZE + j] = piece
+
+        hand_tensor = torch.zeros(HAND_PIECE_KIND_NUM, dtype=torch.long)
+        for c in range(2):
+            for hp in range(7):
+                hand_tensor[c * 7 + hp] = board.pieces_in_hand[c][hp]
+
+        turn_tensor = torch.tensor([board.turn], dtype=torch.long)
+
+        position_tensor = torch.cat([board_tensor, hand_tensor, turn_tensor], dim=0)
+
+        position_tensor = torch.nn.functional.one_hot(position_tensor, PIECE_KIND_NUM)
+        position_tensor = position_tensor.to(torch.float32)
+        return position_tensor
 
 
 if __name__ == "__main__":
     dataset = ShogiDataset("./test_data")
-    board_tensor = dataset[0]
-    print(board_tensor.shape)
-    x = torch.argmax(board_tensor, dim=0)
+    data = dataset[-1]
+    print(data)
+    print(data.shape)
+    x = torch.argmax(data, dim=1)
     print(x)

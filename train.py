@@ -11,7 +11,8 @@ from diffusers import DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from tqdm import tqdm
 
-from dataset import BOARD_SIZE, PIECE_KIND_NUM, ShogiDataset
+from dataset import (BOARD_SIZE, HAND_PIECE_KIND_NUM, INPUT_SEQ_LEN,
+                     PIECE_KIND_NUM, ShogiDataset)
 from model import TransformerModel
 from training_config import TrainingConfig
 
@@ -27,7 +28,7 @@ def generate_board(
     model: TransformerModel, noise_scheduler: DDPMScheduler
 ) -> cshogi.Board:
     """Generate board from model."""
-    x = torch.randn((1, PIECE_KIND_NUM, BOARD_SIZE, BOARD_SIZE)).to("cuda")
+    x = torch.randn((1, INPUT_SEQ_LEN, PIECE_KIND_NUM)).to("cuda")
     for t in noise_scheduler.timesteps:
         t_tensor = torch.tensor([t]).to("cuda").long()
         with torch.no_grad():
@@ -35,16 +36,24 @@ def generate_board(
             x = noise_scheduler.step(y.cpu(), t_tensor.cpu(), x.cpu()).prev_sample.to(
                 "cuda"
             )
+    x = x[0]
     x = torch.argmax(x, dim=1)
     board = cshogi.Board()
     pieces_src = board.pieces
     pieces_in_hand_src = board.pieces_in_hand
     pieces_dst = pieces_src.copy()
-    for i in range(9):
-        for j in range(9):
-            piece = x[0, i, j].item()
+    for i in range(BOARD_SIZE):
+        for j in range(BOARD_SIZE):
+            piece = x[i * BOARD_SIZE + j].item()
             pieces_dst[i * 9 + j] = piece
+    for c in range(2):
+        for hp in range(7):
+            piece = x[BOARD_SIZE * BOARD_SIZE + c * 7 + hp].item()
+            pieces_in_hand_src[c][hp] = piece
+    turn = x[BOARD_SIZE * BOARD_SIZE + HAND_PIECE_KIND_NUM].item()
     board.set_pieces(pieces_dst, pieces_in_hand_src)
+    turn = max(0, min(1, turn))
+    board.turn = turn
     return board
 
 

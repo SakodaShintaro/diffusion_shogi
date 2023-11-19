@@ -3,7 +3,7 @@ import math
 import torch
 import torch.jit
 import torch.nn as nn
-from dataset import BOARD_SIZE, PIECE_KIND_NUM
+from dataset import BOARD_SIZE, PIECE_KIND_NUM, INPUT_SEQ_LEN
 
 CHANNEL_NUM_TO_NHEAD = {
     256: 8,
@@ -48,7 +48,7 @@ class TransformerModel(nn.Module):
 
         self.first_encoding_ = torch.nn.Linear(input_channel_num, channel_num)
         self.positional_encoding_ = torch.nn.Parameter(
-            torch.zeros([SQUARE_NUM, 1, channel_num]), requires_grad=True)
+            torch.zeros([INPUT_SEQ_LEN, 1, channel_num]), requires_grad=True)
         self.time_encoding_ = IntEncoding(channel_num, 1000)
         encoder_layer = torch.nn.TransformerEncoderLayer(
             channel_num,
@@ -62,22 +62,18 @@ class TransformerModel(nn.Module):
         self.head_ = torch.nn.Linear(channel_num, input_channel_num)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
-        channel_num = x.shape[1]
-        board_size = x.shape[2]
         te = self.time_encoding_(t)
         te = te.squeeze(1)
         te = te.unsqueeze(0)
-        x = x.view([batch_size, channel_num, board_size * board_size])
-        x = x.permute([2, 0, 1])  # [bs, ch, H*W] -> [H*W, bs, ch]
+
+        x = x.permute([1, 0, 2])  # [bs, seq, ch] -> [seq, bs, ch]
         x = self.first_encoding_(x)
         x = x + self.positional_encoding_
         x = torch.cat([x, te], dim=0)
         x = self.encoder_(x)
         x = x[0:-1]
         x = self.head_(x)
-        x = x.permute([1, 2, 0])  # [H*W, bs, ch] -> [bs, ch, H*W]
-        x = x.view([batch_size, channel_num, board_size, board_size])
+        x = x.permute([1, 0, 2])  # [seq, bs, ch] -> [bs, ch, seq]
         return x
 
 
