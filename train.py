@@ -1,5 +1,6 @@
 """Train script."""
 import argparse
+import datetime
 import os
 
 import cshogi
@@ -74,14 +75,16 @@ if __name__ == "__main__":
     )
 
     # Initialize accelerator and tensorboard logging
+    datetime_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir = f"train_result/{datetime_str}"
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         log_with="tensorboard",
-        project_dir=f"{config.output_dir}/logs",
+        project_dir=f"{output_dir}/logs",
     )
     if accelerator.is_main_process:
-        os.makedirs(config.output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         accelerator.init_trackers("train_example")
 
     # Prepare everything
@@ -149,10 +152,8 @@ if __name__ == "__main__":
             if (epoch + 1) % config.save_board_epochs == 0 or is_last:
                 board = generate_board(model, noise_scheduler)
                 svg = board.to_svg()
-                with open(f"{config.output_dir}/board_{epoch + 1:04d}.svg", "w") as f:
+                with open(f"{output_dir}/board_{epoch + 1:04d}.svg", "w") as f:
                     f.write(svg)
 
             if (epoch + 1) % config.save_model_epochs == 0 or is_last:
-                torch.save(
-                    model.state_dict(), f"{config.output_dir}/model_{epoch + 1:04d}.pt"
-                )
+                torch.save(model.state_dict(), f"{output_dir}/model_{epoch + 1:04d}.pt")

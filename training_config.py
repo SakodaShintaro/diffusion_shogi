@@ -14,4 +14,3 @@ class TrainingConfig:
     save_board_epochs = 1
     save_model_epochs = 1
     mixed_precision = "fp16"
-    output_dir = "train_result"
